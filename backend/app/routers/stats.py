@@ -1,4 +1,4 @@
-"""表统计信息接口：维护统计报告，覆盖采集统计、标记过期、清理报告等动作。"""
+"""表统计信息接口：维护统计报告，并按同一迁移批次核对新分区布局。"""
 from __future__ import annotations
 
 from typing import Any
@@ -30,9 +30,35 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/layout-checklist", response_model=dict)
+def layout_checklist() -> dict[str, Any]:
+    """统计模块的布局核对清单：记录每个迁移批次的布局切换与影响行数核对结果。"""
+    items = service.layout_checklist()
+    return {"module": "stats", "total": len(items), "items": items}
+
+
+@router.post("/layout-sync", response_model=ActionResult)
+def layout_sync(payload: EntryPayload) -> ActionResult:
+    """让统计模块重新比对当前新分区布局，并把差异记入布局核对清单。"""
+    table_name = payload.values.get("表名称")
+    items = service.sync_partition_layouts(str(table_name) if table_name else None)
+    return ActionResult(
+        ok=True,
+        message=f"布局核对完成，共刷新 {len(items)} 条批次结果",
+        entry={"items": items},
+    )
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出表统计信息清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "stats", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
-    """读取单条统计报告明细；不存在时给出可读的错误说明。"""
+    """读取单条统计报告明细（含布局核对清单）；不存在时给出可读的错误说明。"""
     entry = service.get_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"统计报告 {entry_id} 不存在或已归档")
@@ -52,14 +78,7 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     """对单条统计报告执行采集统计、标记过期、清理报告；不允许的动作会被拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出表统计信息清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "stats", "total": total, "items": items}

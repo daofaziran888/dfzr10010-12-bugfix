@@ -45,5 +45,20 @@ class Store:
         ]
         return {"cards": cards, "modules": modules}
 
+    def bootstrap(self) -> None:
+        """启动后让统计模块按已落库的新分区布局生成布局核对清单。
+
+        延迟导入避免 store 与 services 之间的循环依赖；种子数据与后续动作
+        走同一套核对逻辑，保证清单结果口径一致。
+        """
+        from app.services.stats import StatsService
+
+        for report in self.rows("stats"):
+            report.setdefault("布局核对清单", [])
+        for plan in self.rows("partition"):
+            plan.setdefault("migration_batches", [])
+            plan.setdefault("layouts", [])
+        StatsService().sync_partition_layouts()
+
 
 store = Store()

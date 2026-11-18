@@ -30,9 +30,23 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/layout-checklist", response_model=dict)
+def layout_checklist() -> dict[str, Any]:
+    """分区侧围绕新分区布局核对迁移批次，返回完整批次结果（刷新后仍保留）。"""
+    items = service.layout_checklist()
+    return {"module": "partition", "total": len(items), "items": items}
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出分区演进管理清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "partition", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
-    """读取单条演进计划明细；不存在时给出可读的错误说明。"""
+    """读取单条演进计划明细（含迁移批次与新分区布局）；不存在时给出可读的错误说明。"""
     entry = service.get_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"演进计划 {entry_id} 不存在或已归档")
@@ -50,16 +64,13 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条演进计划执行执行演进、回滚演进、归档计划；不允许的动作会被拦下并说明原因。"""
+    """对单条演进计划执行执行演进、回滚演进、归档计划。
+
+    状态只允许沿 草稿 → 执行中 → 已完成 / 已回滚 单向推进；目标分区与影响
+    行数随迁移批次一起保存，对不上或状态错位时服务层会拒绝保存。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出分区演进管理清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "partition", "total": total, "items": items}

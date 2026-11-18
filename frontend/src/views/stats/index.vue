@@ -55,15 +55,45 @@
       </tbody>
     </table>
 
+    <section class="checklist-block">
+      <header class="checklist-head">
+        <h3>新分区布局核对清单</h3>
+        <button class="btn primary" type="button" @click="syncLayout">比对当前新分区布局</button>
+      </header>
+      <p class="page-desc">
+        统计模块消费分区演进同一份新分区布局，按同一迁移批次重算影响行数；
+        执行中批次在统计补齐前保留旧布局，差异记入本清单，刷新后批次结果保持完整。
+      </p>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th v-for="column in checklistColumns" :key="column">{{ column }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(item, index) in checklist" :key="`${item['报告编号']}-${item['迁移批次']}-${index}`">
+            <td v-for="column in checklistColumns" :key="column">{{ item[column] ?? '—' }}</td>
+          </tr>
+          <tr v-if="!checklist.length">
+            <td :colspan="checklistColumns.length" class="empty-state">暂无布局核对结果，分区演进执行后点击「比对当前新分区布局」生成</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-for="(item, index) in checklistNotes" :key="index" class="check-note">
+        {{ item['报告编号'] }} / {{ item['迁移批次'] }}：{{ item['核对说明'] }}
+      </p>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条表统计信息记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
+      <span v-else-if="okMessage" class="ok-text">{{ okMessage }}</span>
     </footer>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
@@ -71,15 +101,24 @@ type Row = Record<string, string | number | null>
 
 const ENDPOINT = '/api/stats'
 const columns = ["报告编号", "表名称", "行总数", "文件总数", "总容量", "列统计", "统计时间", "报告状态"]
+const checklistColumns = ["报告编号", "迁移批次", "当前分区", "新分区布局", "演进状态", "统计口径", "影响行数", "重算影响行数", "核对结果"]
 const actions = ["采集统计", "标记过期", "清理报告"]
-const statuses = ["草稿", "已采集", "已过期", "已清理"]
-const stats = [{"label": "统计报告总数", "value": 0}, {"label": "已采集报告", "value": 0}, {"label": "已过期报告", "value": 0}]
 
 const rows = ref<Row[]>([])
 const total = ref(0)
+const checklist = ref<Row[]>([])
 const errorMessage = ref('')
+const okMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+const stats = computed(() => [
+  { label: '统计报告总数', value: rows.value.length },
+  { label: '已采集报告', value: rows.value.filter((row) => row.status === '已采集').length },
+  { label: '已过期报告', value: rows.value.filter((row) => row.status === '已过期').length },
+])
+
+const checklistNotes = computed(() => checklist.value.filter((item) => item['核对说明']))
 
 function resetFilters() {
   filters.value = {}
@@ -96,17 +135,52 @@ function openCreate() {
 
 async function runAction(action: string, row: Row) {
   errorMessage.value = ''
+  okMessage.value = ''
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
-      throw new Error('表统计信息动作未生效，请稍后重试')
+    const payload = await response.json()
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.message || '表统计信息动作未生效，请稍后重试')
     }
-    await reload()
+    okMessage.value = payload.message
+    await Promise.all([reload(), loadChecklist()])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '表统计信息操作失败'
+  }
+}
+
+async function syncLayout() {
+  errorMessage.value = ''
+  okMessage.value = ''
+  try {
+    const response = await request(`${ENDPOINT}/layout-sync`, {
+      method: 'POST',
+      body: JSON.stringify({ values: {} }),
+    })
+    const payload = await response.json()
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.message || '布局核对未生效')
+    }
+    okMessage.value = payload.message
+    await loadChecklist()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '布局核对失败'
+  }
+}
+
+async function loadChecklist() {
+  try {
+    const response = await request(`${ENDPOINT}/layout-checklist`)
+    if (!response.ok) {
+      throw new Error('布局核对清单读取失败')
+    }
+    const payload = await response.json()
+    checklist.value = payload.items ?? []
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '布局核对清单读取失败'
   }
 }
 
@@ -126,5 +200,8 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  void reload()
+  void loadChecklist()
+})
 </script>

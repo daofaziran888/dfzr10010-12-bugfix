@@ -25,6 +25,9 @@ app.add_middleware(
 for module in ROUTERS:
     app.include_router(module.router)
 
+# 启动时让统计模块按已落库的新分区布局生成布局核对清单
+store.bootstrap()
+
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
